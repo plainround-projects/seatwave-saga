@@ -1,0 +1,24 @@
+Card capture:
+  event trail (topic, type, message id, reaction):
+    round 1  seatwave.bookings  BookingRequested  booking-1 -> inventory locks: CONFIRMING, expiry no longer applies
+    round 1  seatwave.inventory SeatHeld          inventory-1
+    round 2  seatwave.inventory SeatLocked        inventory-2 -> payment charges: captured 80.00
+    round 3  seatwave.inventory SeatLocked        inventory-2 -> payment charges: already done (captured earlier under seatwave-hold-h-1)
+    round 3  seatwave.payments  PaymentCaptured   payment-1 -> inventory confirms: CONFIRMED
+    round 4  seatwave.inventory SeatConfirmed     inventory-3 -> booking: CONFIRMED
+    round 5  seatwave.bookings  BookingConfirmed  booking-2 -> notifications-email sends one email (Module 27)
+  end: booking CONFIRMED, hold CONFIRMED, kept 80.00, provider ledger 1 capture(s), 0 refund(s)
+  while it ran, the booking row said only PENDING; its progress was spread over 2 + 4 + 1 events on three topics, joined by hold id
+
+Card decline:
+  event trail (topic, type, message id, reaction):
+    round 1  seatwave.bookings  BookingRequested  booking-1 -> inventory locks: CONFIRMING, expiry no longer applies
+    round 1  seatwave.inventory SeatHeld          inventory-1
+    round 2  seatwave.inventory SeatLocked        inventory-2 -> payment charges: refused: card declined
+    round 3  seatwave.inventory SeatLocked        inventory-2 -> payment charges: refused: card declined
+    round 3  seatwave.payments  PaymentFailed     payment-1 -> inventory releases: RELEASED, seat free
+    round 4  seatwave.inventory SeatReleased      inventory-3 -> booking: FAILED
+    round 5  seatwave.bookings  BookingFailed     booking-2
+  end: booking FAILED, hold RELEASED, kept 0.00, provider ledger 0 capture(s), 0 refund(s)
+  while it ran, the booking row said only PENDING; its progress was spread over 2 + 4 + 1 events on three topics, joined by hold id
+

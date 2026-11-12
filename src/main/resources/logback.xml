@@ -1,0 +1,15 @@
+<!-- Logs go to standard error, so a program's standard output holds only its results. The Kafka
+     client is quiet below WARN; this project's adapters log their handled anomalies at WARN. -->
+<configuration>
+  <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+    <target>System.err</target>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{20} %msg%n</pattern>
+    </encoder>
+  </appender>
+  <logger name="org.apache.kafka" level="WARN"/>
+  <logger name="com.zaxxer.hikari" level="WARN"/>
+  <root level="INFO">
+    <appender-ref ref="STDERR"/>
+  </root>
+</configuration>

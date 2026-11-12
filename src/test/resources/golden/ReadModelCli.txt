@@ -1,0 +1,14 @@
+Part 1. Build bookings_by_customer from the topic
+  applied: {CHANGED=11000, SKIPPED_NOT_NEWER=220}
+  10,000 bookings, 11,220 events (1.12 per booking); rows 10,000; differences from the booking table: 0; customer 1042 has 10 confirmed
+Part 2. A bug: the projector's code ignores BookingCanceled
+  reconciliation against the booking table: 1,000 rows differ (drift); fixed code rebuilt from offset 0: 0 differ
+  estimated rebuild at 3,000 events a second: 3.7 s for these 11,220 events; 5.2 hours for a year of 50,000,000 bookings
+Part 3. Rebuild with the events in a shuffled order
+  HIGHER_VERSION_WINS differences: 0
+  LAST_APPLIED_WINS   differences: 501
+Part 4. Schema versions of BookingConfirmed
+  v1 -> v2, add optional price and currency    backward (new reader, old events): ok; forward (old reader, new events): ok
+  v2 -> v3, rename seat_label to seat          backward (new reader, old events): [v3 reader requires 'seat', v2 writer never writes it]; forward (old reader, new events): [v2 reader requires 'seat_label', v3 writer never writes it]
+  v2 -> v3, make price required                backward (new reader, old events): [v3 reader requires 'price', v2 writer may omit it]; forward (old reader, new events): ok
+  a v1 reader given one v3 (renamed) event: missing [seat_label] -> park it on seatwave.notifications.dlq (Module 27's poison message)

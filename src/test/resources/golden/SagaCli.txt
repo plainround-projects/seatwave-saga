@@ -1,0 +1,65 @@
+Part 1. Success: hold at 0 s, confirm at 10 s
+    10.005 s  SEAT_HELD         -> PAYMENT_REQUESTED ok: CONFIRMING, expiry no longer applies
+    12.005 s  PAYMENT_REQUESTED -> PAYMENT_SUCCEEDED ok: captured 80.00
+    12.010 s  PAYMENT_SUCCEEDED -> COMPLETED         ok: CONFIRMED
+  end: COMPLETED, hold CONFIRMED, kept from the fan 80.00, correct
+  outbox of booking   4 row(s): LockSeat, ChargePayment, ConfirmSeat, BookingConfirmed
+  outbox of inventory 3 row(s): SeatHeld, SeatLocked, SeatConfirmed
+  outbox of payment   1 row(s): PaymentCaptured
+
+Part 2. Card declined: the compensation releases the seat
+    10.005 s  SEAT_HELD         -> PAYMENT_REQUESTED ok: CONFIRMING, expiry no longer applies
+    12.005 s  PAYMENT_REQUESTED -> PAYMENT_FAILED    refused: card declined
+    12.010 s  PAYMENT_FAILED    -> COMPENSATED       ok: RELEASED, seat free
+  end: COMPENSATED, hold RELEASED, kept from the fan 0.00, correct
+
+Part 3. The provider captures but the answer is lost (Module 7's timeout)
+    10.005 s  SEAT_HELD         -> PAYMENT_REQUESTED ok: CONFIRMING, expiry no longer applies
+    12.005 s  PAYMENT_REQUESTED -> PAYMENT_REQUESTED unavailable: timeout, outcome unknown (retry at 13.005 s)
+    15.005 s  PAYMENT_REQUESTED -> PAYMENT_SUCCEEDED already done: captured earlier under seatwave-hold-h-1
+    15.010 s  PAYMENT_SUCCEEDED -> COMPLETED         ok: CONFIRMED
+  end: COMPLETED, hold CONFIRMED, kept from the fan 80.00, correct
+  provider ledger: 1 capture(s), 0 refund(s)
+
+Part 4. Confirm at 299 s, hold expires at 300 s, NO semantic lock
+   299.000 s  SEAT_HELD         -> PAYMENT_REQUESTED ok: hold is ACTIVE (no lock taken)
+   300.000 s  expiry sweep ends 1 hold(s); seat A-7 is AVAILABLE
+   300.500 s  fan 2000 asks to hold A-7: ok: ACTIVE for 300 s; seat A-7 is ACTIVE by h-2
+   301.000 s  PAYMENT_REQUESTED -> PAYMENT_SUCCEEDED ok: captured 80.00
+   301.005 s  PAYMENT_SUCCEEDED -> REFUND_REQUESTED  refused: seat lost: hold h-1 is EXPIRED
+   303.005 s  REFUND_REQUESTED  -> REFUND_REQUESTED  unavailable: provider answered 503 (retry at 304.005 s)
+   306.005 s  REFUND_REQUESTED  -> REFUND_REQUESTED  unavailable: provider answered 503 (retry at 308.005 s)
+   310.005 s  REFUND_REQUESTED  -> PAYMENT_REFUNDED  ok: refunded 80.00
+   310.010 s  PAYMENT_REFUNDED  -> COMPENSATED       already done: hold already expired
+  end: COMPENSATED, hold EXPIRED, kept from the fan 0.00, correct
+  provider ledger: 1 capture(s), 1 refund(s)
+
+Part 5. The same timing WITH the semantic lock (CONFIRMING)
+   299.000 s  SEAT_HELD         -> PAYMENT_REQUESTED ok: CONFIRMING, expiry no longer applies
+   300.000 s  expiry sweep ends 0 hold(s); seat A-7 is CONFIRMING by h-1
+   300.500 s  fan 2000 asks to hold A-7: refused: seat A-7 is claimed by h-1; seat A-7 is CONFIRMING by h-1
+   301.000 s  PAYMENT_REQUESTED -> PAYMENT_SUCCEEDED ok: captured 80.00
+   301.005 s  PAYMENT_SUCCEEDED -> COMPLETED         ok: CONFIRMED
+  end: COMPLETED, hold CONFIRMED, kept from the fan 80.00, correct
+  provider ledger: 1 capture(s), 0 refund(s)
+
+Part 6. The orchestrator crashes before recording, at every step; resumed 30 s later
+  capture              crash at step 1 (SEAT_HELD        ) -> COMPLETED   hold CONFIRMED kept 80.00  1 capture(s), 0 refund(s)  correct
+  capture              crash at step 2 (PAYMENT_REQUESTED) -> COMPLETED   hold CONFIRMED kept 80.00  1 capture(s), 0 refund(s)  correct
+  capture              crash at step 3 (PAYMENT_SUCCEEDED) -> COMPLETED   hold CONFIRMED kept 80.00  1 capture(s), 0 refund(s)  correct
+  decline              crash at step 1 (SEAT_HELD        ) -> COMPENSATED hold RELEASED  kept  0.00  0 capture(s), 0 refund(s)  correct
+  decline              crash at step 2 (PAYMENT_REQUESTED) -> COMPENSATED hold RELEASED  kept  0.00  0 capture(s), 0 refund(s)  correct
+  decline              crash at step 3 (PAYMENT_FAILED   ) -> COMPENSATED hold RELEASED  kept  0.00  0 capture(s), 0 refund(s)  correct
+  capture_then_timeout crash at step 1 (SEAT_HELD        ) -> COMPLETED   hold CONFIRMED kept 80.00  1 capture(s), 0 refund(s)  correct
+  capture_then_timeout crash at step 2 (PAYMENT_REQUESTED) -> COMPLETED   hold CONFIRMED kept 80.00  1 capture(s), 0 refund(s)  correct
+  capture_then_timeout crash at step 3 (PAYMENT_REQUESTED) -> COMPLETED   hold CONFIRMED kept 80.00  1 capture(s), 0 refund(s)  correct
+  capture_then_timeout crash at step 4 (PAYMENT_SUCCEEDED) -> COMPLETED   hold CONFIRMED kept 80.00  1 capture(s), 0 refund(s)  correct
+
+Part 7. A stuck saga: the orchestrator dies after the charge, before recording it, and stays down
+   300.000 s  sagas older than the 300 s hold: []; seat A-7 is CONFIRMING by h-1; expiry sweep ends 0
+   400.000 s  sagas older than the 300 s hold: [b-1004]; seat A-7 is CONFIRMING by h-1; expiry sweep ends 0
+  the sweeper resumes b-1004 (the provider's key returns the first charge):
+   402.000 s  PAYMENT_REQUESTED -> PAYMENT_SUCCEEDED already done: captured earlier under seatwave-hold-h-1
+   402.005 s  PAYMENT_SUCCEEDED -> COMPLETED         ok: CONFIRMED
+  end: COMPLETED, hold CONFIRMED, kept from the fan 80.00, correct
+  provider ledger: 1 capture(s), 0 refund(s)

@@ -1,0 +1,17 @@
+Part 1. Two writes to two systems: commit, then publish (Module 27's confirm)
+  commit then publish  none                      state saved: yes event published: yes -> consistent: both
+  commit then publish  crash_before_first_step   state saved: no  event published: no  -> consistent: neither
+  commit then publish  crash_between_the_steps   state saved: yes event published: no  -> BROKEN: booking saved, event lost (no email, no index row, ever)
+  commit then publish  second_step_refused       state saved: yes event published: no  -> BROKEN: booking saved, event lost (no email, no index row, ever)
+
+Part 1b. The other order: publish, then commit
+  publish then commit  none                      state saved: yes event published: yes -> consistent: both
+  publish then commit  crash_before_first_step   state saved: no  event published: no  -> consistent: neither
+  publish then commit  crash_between_the_steps   state saved: no  event published: yes -> BROKEN: event sent for a booking that does not exist
+  publish then commit  second_step_refused       state saved: no  event published: yes -> BROKEN: event sent for a booking that does not exist
+
+Part 2. Transactional outbox: booking row and event row in one commit
+  no crash                                         state saved: yes | first pass published 1, marked 1 | restart published 0 | events on the topic: 1 | emails: 1, duplicates skipped: 0
+  service crashes before the commit                state saved: no  | first pass published 0, marked 0 | restart published 0 | events on the topic: 0 | emails: 0, duplicates skipped: 0
+  broker down while the relay runs, back later     state saved: yes | first pass published 0, marked 0 (broker down) | restart published 1 | events on the topic: 1 | emails: 1, duplicates skipped: 0
+  relay crashes after publishing, before marking   state saved: yes | first pass published 1, marked 0 | restart published 1 | events on the topic: 2 | emails: 1, duplicates skipped: 1

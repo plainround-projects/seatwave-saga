@@ -1,0 +1,30 @@
+Run: coordinator crash none
+      0.000 s  inventory WORKING   payment WORKING   coordinator -> both: PREPARE
+      0.003 s  inventory PREPARED  payment PREPARED  both forced a prepare record and voted YES; seat A-7 locked
+      0.006 s  inventory PREPARED  payment PREPARED  coordinator forced COMMIT: the decision exists from here
+      0.007 s  inventory PREPARED  payment COMMITTED payment got COMMIT: the fan is charged
+      0.007 s  inventory COMMITTED payment COMMITTED inventory got COMMIT: seat A-7 sold
+      seat A-7 locked for 0.004 s
+
+Run: coordinator crash after_votes_before_decision
+      0.000 s  inventory WORKING   payment WORKING   coordinator -> both: PREPARE
+      0.003 s  inventory PREPARED  payment PREPARED  both forced a prepare record and voted YES; seat A-7 locked
+      0.004 s  inventory PREPARED  payment PREPARED  coordinator crashes before forcing its decision
+     30.004 s  inventory PREPARED  payment PREPARED  inventory asks payment: 'prepared too, no decision'; both wait
+     60.004 s  inventory PREPARED  payment PREPARED  inventory asks payment: 'prepared too, no decision'; both wait
+     90.004 s  inventory PREPARED  payment PREPARED  inventory asks payment: 'prepared too, no decision'; both wait
+    120.004 s  inventory ABORTED   payment ABORTED   coordinator restarts, finds no decision, aborts (presumed abort)
+      seat A-7 locked for 120.001 s
+
+Run: coordinator crash after_first_commit_message
+      0.000 s  inventory WORKING   payment WORKING   coordinator -> both: PREPARE
+      0.003 s  inventory PREPARED  payment PREPARED  both forced a prepare record and voted YES; seat A-7 locked
+      0.006 s  inventory PREPARED  payment PREPARED  coordinator forced COMMIT: the decision exists from here
+      0.007 s  inventory PREPARED  payment COMMITTED payment got COMMIT: the fan is charged
+      0.007 s  inventory PREPARED  payment COMMITTED coordinator crashes before telling inventory
+      if inventory gave up and aborted alone now: charged, and seat A-7 released (the walkthrough's incident); so it must wait, holding the lock
+    120.007 s  inventory PREPARED  payment COMMITTED coordinator restarts, reads COMMIT in its log, resends it
+    120.007 s  inventory COMMITTED payment COMMITTED inventory got COMMIT: seat A-7 sold
+      seat A-7 locked for 120.004 s
+
+At 1,500 confirms a second, a coordinator down for 120 s leaves about 9 transactions in doubt (rate x the 6 ms from prepare to decision), each holding its seat lock for the whole outage, and refuses 180,000 new confirms.

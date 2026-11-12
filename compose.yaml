@@ -1,0 +1,195 @@
+# SeatWave's saga stack for Module 28, under the Compose project name seatwave-saga: one Kafka
+# broker in KRaft mode (also its own controller, no ZooKeeper), the topic setup, one PostgreSQL per
+# service (booking, inventory, payment) and the payment provider's stub (Module 7's stand-in).
+# Start and stop it with scripts/stack.sh, which brings everything down with "down -v". The three
+# services themselves (booking with the orchestrator, inventory, payment) and their relays run on
+# the host as plain java processes, so that a drill can kill one by its process id.
+#
+# Images, pinned by tag and digest, checked on Docker Hub on 12 November 2026, each with an arm64
+# variant: apache/kafka:4.4.0 (the vendor's own image; Module 27's pin), postgres:18.6 (Docker
+# Official Image, the pin of Modules 13 to 27; its data folder is /var/lib/postgresql/18/docker,
+# under the image's volume /var/lib/postgresql, read from the image on 12 November 2026), and
+# eclipse-temurin:25.0.5_8-jdk-noble and -jre-noble (Docker Official Images, pinned in
+# stub/Dockerfile) for the stub. Ports on 127.0.0.1 only, from Module 28's range 22800 to 22899. Nothing runs
+# privileged, nothing uses the host network or the Docker socket, and the only folders mounted are
+# this project's db/ files, read-only.
+#
+# Memory: the Docker VM has 8 GB for every project on this machine, so this stack has ONE broker
+# (a 256 MB heap in a 640 MB container) where Module 27 ran three: the outbox, the relay and the
+# saga do not depend on the broker count, but replication (acks=all waiting for followers,
+# min.insync.replicas, a leader failover) is not shown here; Module 27 shows it. Each PostgreSQL
+# gets 384 MB and the stub 160 MB with a 64 MB heap: about 1.95 GB in all, plus 384 MB for
+# kafka-init while it runs.
+name: seatwave-saga
+
+x-postgres: &postgres
+  image: postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+  security_opt:
+    - no-new-privileges:true
+  # The entrypoint starts as root to own the data folder, then runs PostgreSQL as its own user.
+  cap_drop:
+    - ALL
+  cap_add:
+    - CHOWN
+    - DAC_OVERRIDE
+    - FOWNER
+    - SETGID
+    - SETUID
+  cpus: 2
+  mem_limit: 384m
+  shm_size: 128m
+  environment:
+    POSTGRES_USER: seatwave
+    POSTGRES_DB: seatwave
+    POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+  secrets:
+    - postgres_password
+  tmpfs:
+    - /var/run/postgresql
+    - /tmp
+  healthcheck:
+    test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "seatwave", "-d", "seatwave"]
+    interval: 1s
+    timeout: 2s
+    retries: 60
+
+services:
+  kafka:
+    image: apache/kafka:4.4.0@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cpus: 2
+    mem_limit: 640m
+    # A port that answers is enough here: kafka-init's commands wait for the broker itself.
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "19092"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+    environment:
+      # 16 bytes in base64, as kafka-storage.sh random-uuid prints it; the image formats the log
+      # folder with it on first start.
+      CLUSTER_ID: c2VhdHdhdmUtc2FnYS0yOA
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://:19092,CONTROLLER://:29093,PLAINTEXT_HOST://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092,PLAINTEXT_HOST://127.0.0.1:22800
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # One broker cannot hold three copies of the internal topics; production keeps 3 (Module 27).
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Topics are created on purpose by kafka-init (and by the drills, for their own topics).
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_HEAP_OPTS: -Xmx256m -Xms256m
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    ports:
+      - "127.0.0.1:22800:9092"
+
+  # Module 27's booking topic, each participant's event topic, and the saga's command log; all
+  # keyed (booking id, hold id or provider key), 24 partitions like Module 27's, one replica here.
+  kafka-init:
+    image: apache/kafka:4.4.0@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 384m
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_HEAP_OPTS: -Xmx128m
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        for topic in seatwave.bookings seatwave.inventory seatwave.payments seatwave.saga.commands;
+        do /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists
+        --topic "$$topic" --partitions 24 --replication-factor 1
+        --config retention.ms=604800000 || exit 1; done
+    restart: "no"
+
+  booking-db:
+    <<: *postgres
+    volumes:
+      - booking-data:/var/lib/postgresql
+      - ./db/common/V1__outbox.sql:/docker-entrypoint-initdb.d/V1__outbox.sql:ro
+      - ./db/booking/V2__booking_sagas.sql:/docker-entrypoint-initdb.d/V2__booking_sagas.sql:ro
+    ports:
+      - "127.0.0.1:22801:5432"
+
+  # Inventory and payment allow prepared transactions for the two-phase commit drill only
+  # (scripts/drill.sh two-phase); PostgreSQL's default, kept by booking-db, is 0, which disables them.
+  inventory-db:
+    <<: *postgres
+    command: ["postgres", "-c", "max_prepared_transactions=8"]
+    volumes:
+      - inventory-data:/var/lib/postgresql
+      - ./db/common/V1__outbox.sql:/docker-entrypoint-initdb.d/V1__outbox.sql:ro
+      - ./db/inventory/V2__module13_catalog_and_holds.sql:/docker-entrypoint-initdb.d/V2__module13_catalog_and_holds.sql:ro
+      - ./db/inventory/V3__holds_semantic_lock.sql:/docker-entrypoint-initdb.d/V3__holds_semantic_lock.sql:ro
+      - ./db/inventory/V4__lab_catalog.sql:/docker-entrypoint-initdb.d/V4__lab_catalog.sql:ro
+    ports:
+      - "127.0.0.1:22802:5432"
+
+  payment-db:
+    <<: *postgres
+    command: ["postgres", "-c", "max_prepared_transactions=8"]
+    volumes:
+      - payment-data:/var/lib/postgresql
+      - ./db/common/V1__outbox.sql:/docker-entrypoint-initdb.d/V1__outbox.sql:ro
+      - ./db/payment/V2__payments.sql:/docker-entrypoint-initdb.d/V2__payments.sql:ro
+    ports:
+      - "127.0.0.1:22803:5432"
+
+  # Module 7's stand-in for the card provider: charges and refunds by idempotency key, with an
+  # admin API that scripts declines, lost answers, latency and failing refunds, and a ledger the
+  # drills read. JDK only; built from stub/Dockerfile by scripts/stack.sh up (docker build, so the
+  # image is this project's own and never pulled), and run as a user without privileges.
+  payment-provider:
+    image: seatwave-saga/payment-provider-stub:1.0.0
+    pull_policy: never
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    cpus: 1
+    mem_limit: 160m
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx64m -Xss512k
+      STUB_PORT: "8080"
+      # Module 7 and Section 7: the provider answers in 200 ms typically; the drills set it.
+      STUB_LATENCY_MILLIS: "200"
+      # A lost answer: the stub captures, then answers only after this long (the caller timed out).
+      STUB_LOST_ANSWER_MILLIS: "10000"
+    healthcheck:
+      test: ["CMD", "java", "-Xmx16m", "-XX:TieredStopAtLevel=1", "-cp", "/opt/stub", "io.plainround.seatwave.saga.stub.PaymentProviderStub", "--check"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    ports:
+      - "127.0.0.1:22820:8080"
+
+secrets:
+  postgres_password:
+    file: ./.secrets/postgres.password
+
+volumes:
+  kafka-data:
+  booking-data:
+  inventory-data:
+  payment-data:
