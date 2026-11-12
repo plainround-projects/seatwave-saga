@@ -2,12 +2,17 @@ package io.plainround.seatwave.saga.stub;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.sun.management.HotSpotDiagnosticMXBean;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,7 +58,7 @@ class PaymentProviderStubTest {
     boolean isTimedOut = false;
     try {
       post("/charges?amount=80.00", KEY, SHORT_WAIT);
-    } catch (java.net.http.HttpTimeoutException timedOut) {
+    } catch (HttpTimeoutException timedOut) {
       isTimedOut = true;
     }
     HttpResponse<String> retry = post("/charges?amount=80.00", KEY, LONG_WAIT);
@@ -118,7 +123,29 @@ class PaymentProviderStubTest {
     if (!key.isEmpty()) {
       request.header("Idempotency-Key", key);
     }
-    return client.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    try {
+      return client.send(
+          request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    } catch (HttpTimeoutException timedOut) {
+      if (timeout.equals(LONG_WAIT)) {
+        saveThreadDump();
+      }
+      throw timedOut;
+    }
+  }
+
+  /**
+   * A request the stub answers at once has, rarely, gone unanswered for the whole long wait on a
+   * developer machine, and the cause is not known (the README's "Known issue"). The dump shows what
+   * every thread, virtual ones included, was doing at that moment, so the next time leaves
+   * evidence.
+   */
+  private static void saveThreadDump() throws IOException {
+    Path folder = Path.of("build", "reports", "stub-timeouts");
+    Files.createDirectories(folder);
+    Path dump = folder.resolve("threads-" + System.nanoTime() + ".txt").toAbsolutePath();
+    ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class)
+        .dumpThreads(dump.toString(), HotSpotDiagnosticMXBean.ThreadDumpFormat.TEXT_PLAIN);
   }
 
   private String get(String path) throws Exception {

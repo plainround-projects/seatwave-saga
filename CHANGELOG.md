@@ -1,5 +1,9 @@
 # Changelog
 
+## After 1.0.0 (12 November 2026, no version change)
+
+- Known issue recorded, not fixed: `PaymentProviderStubTest.aDeclinedCardIsDeclinedAgainAndMovesNoMoney` failed once in a loop of 25 runs of the test task with a 5-second timeout on a request the stub answers at once. A search (300 runs of the class, 36 of the whole task, 3,000 of the test's steps in one process) did not make it happen again and did not find the cause. The earlier guess in 1.0.0, that the one failure of the first 40-run loop came from `HttpCommandsTest`'s short timeouts, is therefore not established. The test now saves a thread dump to `build/reports/stub-timeouts/` when a long wait times out. See "Known issue" in the README.
+
 ## 1.0.0 (12 November 2026)
 
 - First build of Module 28's project from its code seed: Gradle 9.9.1 wrapper, version catalog, lockfiles, Spotless with google-java-format 2.0.0, JaCoCo 0.8.16 with a 0.80 line floor, one task per program, `drillClasspath` for the drills.

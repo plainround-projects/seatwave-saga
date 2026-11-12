@@ -615,6 +615,10 @@ src/test/java/...                              unit tests (./gradlew check) and 
 - The read model, the email claim and the bookings live in the booking database, so the lab needs three databases, not five.
 - Commands go to participants by direct HTTP calls; `seatwave.saga.commands` receives them through the outbox as the saga's log, and nothing consumes it here.
 
+## Known issue
+
+One unit test has failed twice for a reason that is not known. On 12 November 2026 the builder's 40-run loop of the test task failed once without keeping the test's name, and a later loop of 25 runs failed once in `PaymentProviderStubTest.aDeclinedCardIsDeclinedAgainAndMovesNoMoney`: a request the stub answers at once got no answer within the test's 5-second wait. A search for the cause then ran the test class 300 times, the whole test task 36 times and a copy of that test's steps 3,000 times in one process without one failure, so the rate is low and the cause was not found; reading the JDK's HTTP server ruled out a lost wake-up after a response, the client's upgrade headers and the lock in the charge path. Until it is explained, treat a single such timeout as this issue and not as a change in behavior. The test now writes a dump of every thread, virtual ones included, to `build/reports/stub-timeouts/` when a long wait times out, so the next time leaves evidence. In the stack drills the stub runs in a container and was judged by its ledger and the database rows: no drill showed a charge that went unanswered without being scripted to.
+
 ## No CI on purpose
 
 The course keeps its projects free of CI configuration; every gate (`./gradlew check`, the stack tests, the drills, the mutants) is run locally and its output is above.
